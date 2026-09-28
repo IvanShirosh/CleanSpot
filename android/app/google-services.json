@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "502186374219",
+    "project_id": "clearspot-640fb",
+    "storage_bucket": "clearspot-640fb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:502186374219:android:3c77680ea4fb9580bf09ce",
+        "android_client_info": {
+          "package_name": "com.example.clean_spot"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAAw7OlcpEnkZ_Hy7oZ9RXJBDe9MOfUrAE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
