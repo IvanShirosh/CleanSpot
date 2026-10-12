@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
+import 'auth_gate.dart';
 import 'firebase_options.dart';
 
 Future<void> main() async {
@@ -14,16 +15,6 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
-      title: 'CleanSpot',
-      home: Scaffold(
-        body: Center(
-          child: Text(
-            'CleanSpot',
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-        ),
-      ),
-    );
+    return const MaterialApp(title: 'CleanSpot', home: AuthGate());
   }
 }
