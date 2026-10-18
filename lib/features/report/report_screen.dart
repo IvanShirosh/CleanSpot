@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../app/theme_proposal.dart';
 
@@ -61,86 +62,8 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 
   void _submitReport() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.primaryLight,
-                ),
-                child: const Icon(
-                  Icons.check,
-                  color: AppColors.primary,
-                  size: 32,
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Report Submitted!',
-                style: TextStyle(
-                  fontFamily: AppTypography.fontFamily,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Thank you for keeping our community safe. Your report is now under verification (+20 pts).',
-                style: TextStyle(
-                  fontFamily: AppTypography.fontFamily,
-                  fontSize: 13,
-                  color: AppColors.textSecondary,
-                  height: 1.4,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(ctx).pop();
-                    setState(() {
-                      _selectedPhotoUrl = null;
-                      _locationText = 'Latitude — · Longitude —';
-                      _descriptionController.clear();
-                    });
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: AppColors.surface,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  child: const Text(
-                    'Done',
-                    style: TextStyle(
-                      fontFamily: AppTypography.fontFamily,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    // Demo flow: show the AI verification screen, then the approved result.
+    context.go('/report/verifying', extra: _selectedPhotoUrl);
   }
 
   Widget _buildPhotoSection(BuildContext context) {

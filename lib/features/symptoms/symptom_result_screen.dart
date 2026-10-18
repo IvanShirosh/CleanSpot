@@ -1,5 +1,6 @@
 // lib/features/symptoms/symptom_result_screen.dart
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'symptom_questions.dart';
  
 enum RiskLevel { high, medium, low }
@@ -160,8 +161,8 @@ class SymptomResultScreen extends StatelessWidget {
  
               ElevatedButton(
                 onPressed: () {
-                  onRestart();
-                  Navigator.pop(context);
+                  onRestart(); // reset the questionnaire for next time
+                  context.go('/home');
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.button,
@@ -172,7 +173,7 @@ class SymptomResultScreen extends StatelessWidget {
                   ),
                 ),
                 child: const Text(
-                  'Start Again',
+                  'Back to Home',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
