@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 const _tabs = [
-  (path: '/map', label: 'Map', icon: Icons.map_outlined),
-  (path: '/report', label: 'Report', icon: Icons.add_a_photo_outlined),
+  (path: '/home', label: 'Map', icon: Icons.map_outlined),
+  (path: '/report', label: 'Report', icon: Icons.add_circle_outline),
   (path: '/rewards', label: 'Rewards', icon: Icons.card_giftcard_outlined),
   (path: '/profile', label: 'Profile', icon: Icons.person_outline),
 ];
@@ -21,11 +21,11 @@ class HomeShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final location = GoRouterState.of(context).uri.path;
-    final index = _tabs.indexWhere((t) => location.startsWith(t.path));
+    int index = _tabs.indexWhere((t) => location.startsWith(t.path));
+    if (location == '/map') index = 0;
     final onTab = index != -1;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('CleanSpot')),
       drawer: Drawer(
         child: SafeArea(
           child: Column(
@@ -57,13 +57,20 @@ class HomeShell extends StatelessWidget {
       ),
       body: child,
       bottomNavigationBar: onTab
-          ? NavigationBar(
-              selectedIndex: index,
-              onDestinationSelected: (i) => context.go(_tabs[i].path),
-              destinations: [
-                for (final t in _tabs)
-                  NavigationDestination(icon: Icon(t.icon), label: t.label),
-              ],
+          ? Container(
+              decoration: const BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: Color(0xFFE8EDE8), width: 1),
+                ),
+              ),
+              child: NavigationBar(
+                selectedIndex: index,
+                onDestinationSelected: (i) => context.go(_tabs[i].path),
+                destinations: [
+                  for (final t in _tabs)
+                    NavigationDestination(icon: Icon(t.icon), label: t.label),
+                ],
+              ),
             )
           : null,
     );
