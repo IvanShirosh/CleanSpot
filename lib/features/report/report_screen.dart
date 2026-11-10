@@ -1,7 +1,16 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme_proposal.dart';
+import '../ai_validation/capture_result.dart';
+import '../ai_validation/capture_service.dart';
+import '../ai_validation/report_check_controller.dart';
+import '../ai_validation/report_outcome.dart';
+
+/// Shows the "UI FLOW" stage bar and the Simulate Approved/Rejected buttons.
+/// Off by default; enable with: flutter run --dart-define=DEMO_CONTROLS=true
+const bool _demoControls = bool.fromEnvironment('DEMO_CONTROLS');
 
 /// The 4 step states of the AI report verification workflow:
 /// 1. [form]      - Image 1: "Report a Breeding Site"
@@ -16,7 +25,12 @@ enum ReportFlowStep {
 }
 
 class ReportScreen extends StatefulWidget {
-  const ReportScreen({super.key});
+  const ReportScreen({super.key, this.onDecision});
+
+  /// Hook for report submission / points: called once when the AI check ends
+  /// in a final approved or rejected decision. Nothing is saved by this screen.
+  /// Not called when the check itself fails (the user gets a retry instead).
+  final ReportDecisionCallback? onDecision;
 
   @override
   State<ReportScreen> createState() => _ReportScreenState();
@@ -52,16 +66,125 @@ class _ReportScreenState extends State<ReportScreen>
     super.dispose();
   }
 
+  // Live camera photo + GPS fix from captureReportPhoto(); null until taken.
+  CaptureResult? _capture;
+  bool _capturing = false;
+
+  Future<void> _takePhoto() async {
+    setState(() => _capturing = true);
+    final result = await captureReportPhoto();
+    if (!mounted) return;
+    setState(() {
+      _capturing = false;
+      if (result.isOk) _capture = result;
+    });
+    if (!result.isOk && !result.wasCancelled) _showMessage(result.message!);
+  }
+
+  void _showMessage(String text) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  // AI check state. _outcome is set when a final decision was made;
+  // _checkError is set when the check itself failed (offer a retry).
+  final ReportCheckController _checker = ReportCheckController();
+  ReportOutcome? _outcome;
+  CheckPhase _checkPhase = CheckPhase.validating;
+  String? _checkError;
+  int _checkToken = 0; // ignores results of a check that was abandoned
+
   void _submitReport() {
+    if (_capture?.isOk != true) return;
     setState(() {
       _currentStep = ReportFlowStep.checking;
     });
+    _runCheck();
+  }
+
+  Future<void> _runCheck() async {
+    final capture = _capture;
+    if (capture == null || !capture.isOk) return;
+    final token = ++_checkToken;
+    setState(() {
+      _outcome = null;
+      _checkError = null;
+      _checkPhase = CheckPhase.validating;
+    });
+
+    final result = await _checker.check(
+      capture,
+      onPhase: (phase) {
+        if (mounted && token == _checkToken) {
+          setState(() => _checkPhase = phase);
+        }
+      },
+    );
+    if (!mounted || token != _checkToken) return;
+
+    if (!result.isSuccess) {
+      if (kDebugMode) debugPrint('Report check failed: ${result.detail}');
+      setState(() => _checkError = result.userMessage);
+      return;
+    }
+    final outcome = result.outcome!;
+    setState(() {
+      _outcome = outcome;
+      _currentStep =
+          outcome.eligible ? ReportFlowStep.approved : ReportFlowStep.rejected;
+    });
+    widget.onDecision?.call(outcome);
   }
 
   void _resetToForm() {
+    _checkToken++; // abandon any check still running
     setState(() {
+      _capture = null;
+      _outcome = null;
+      _checkError = null;
       _currentStep = ReportFlowStep.form;
     });
+  }
+
+  /// The captured photo, or the sample photo when there is none (demo only).
+  Widget _buildPhotoImage(double height) {
+    final bytes = _capture?.jpegBytes;
+    Widget placeholder() => Container(
+          height: height,
+          color: AppColors.primaryLight,
+          alignment: Alignment.center,
+          child: const Icon(
+            Icons.image_outlined,
+            size: 48,
+            color: AppColors.primary,
+          ),
+        );
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        height: height,
+        width: double.infinity,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) => placeholder(),
+      );
+    }
+    return Image.network(
+      _samplePhotoUrl,
+      height: height,
+      width: double.infinity,
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => placeholder(),
+    );
+  }
+
+  /// Coordinates and accuracy of the capture (sample text when demoing).
+  String _captureCaption() {
+    final c = _capture;
+    if (c == null || !c.isOk) return 'Sample campus garden · 13 Oct, 9:41 AM';
+    return '${c.latitude!.toStringAsFixed(5)}, '
+        '${c.longitude!.toStringAsFixed(5)} · ±${c.accuracyMeters!.round()} m';
   }
 
   @override
@@ -71,8 +194,8 @@ class _ReportScreenState extends State<ReportScreen>
       body: SafeArea(
         child: Column(
           children: [
-            // Top workflow stepper helper bar (allows instant switching between all 4 stages & My Reports)
-            _buildStageSwitcherBar(),
+            // Demo-only stage bar (flutter run --dart-define=DEMO_CONTROLS=true)
+            if (_demoControls) _buildStageSwitcherBar(),
 
             // Active step content
             Expanded(
@@ -262,9 +385,9 @@ class _ReportScreenState extends State<ReportScreen>
                       color: AppColors.textPrimary,
                     ),
                   ),
-                  const Text(
-                    '1 photo added',
-                    style: TextStyle(
+                  Text(
+                    _capture == null ? 'No photo yet' : '1 photo added',
+                    style: const TextStyle(
                       fontFamily: AppTypography.fontFamily,
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -275,25 +398,26 @@ class _ReportScreenState extends State<ReportScreen>
               ),
               const SizedBox(height: 12),
 
-              // Tyre image preview
+              // Live photo preview (placeholder until a photo is taken)
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: Image.network(
-                  _samplePhotoUrl,
-                  height: 170,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    height: 170,
-                    color: AppColors.primaryLight,
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      Icons.image_outlined,
-                      size: 48,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
+                child: _capture == null
+                    ? Container(
+                        height: 170,
+                        color: AppColors.primaryLight,
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.photo_camera_outlined,
+                          size: 48,
+                          color: AppColors.primary,
+                        ),
+                      )
+                    : Image.memory(
+                        _capture!.jpegBytes!,
+                        height: 170,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
               ),
               const SizedBox(height: 14),
 
@@ -302,7 +426,7 @@ class _ReportScreenState extends State<ReportScreen>
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: () {},
+                      onPressed: _capturing ? null : _takePhoto,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.primaryDark,
                         side: const BorderSide(color: AppColors.border, width: 1),
@@ -311,20 +435,29 @@ class _ReportScreenState extends State<ReportScreen>
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 13),
                       ),
-                      child: const Text(
-                        'Camera',
-                        style: TextStyle(
-                          fontFamily: AppTypography.fontFamily,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                      child: _capturing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text(
+                              'Camera',
+                              style: TextStyle(
+                                fontFamily: AppTypography.fontFamily,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: () {},
+                      // Verified reports must be live photos.
+                      onPressed: () => _showMessage(
+                        'Please use the camera so your report can be verified',
+                      ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.primaryDark,
                         side: const BorderSide(color: AppColors.border, width: 1),
@@ -411,7 +544,9 @@ class _ReportScreenState extends State<ReportScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Sample campus garden',
+                            _capture == null
+                                ? 'Location not added yet'
+                                : 'Location added',
                             style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
                               fontSize: 15,
                               fontWeight: FontWeight.bold,
@@ -420,7 +555,11 @@ class _ReportScreenState extends State<ReportScreen>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Location added · Illustrative map',
+                            _capture == null
+                                ? 'Take a photo to add your location'
+                                : '${_capture!.latitude!.toStringAsFixed(5)}, '
+                                    '${_capture!.longitude!.toStringAsFixed(5)}'
+                                    ' · ±${_capture!.accuracyMeters!.round()} m',
                             style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
                               fontSize: 12,
                               color: AppColors.textSecondary,
@@ -462,10 +601,13 @@ class _ReportScreenState extends State<ReportScreen>
           width: double.infinity,
           height: 52,
           child: ElevatedButton(
-            onPressed: _submitReport,
+            // Enabled only after a camera photo with a valid GPS fix.
+            onPressed: _capture?.isOk == true ? _submitReport : null,
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
+              disabledBackgroundColor: AppColors.border,
+              disabledForegroundColor: AppColors.textSecondary,
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
@@ -483,16 +625,18 @@ class _ReportScreenState extends State<ReportScreen>
         ),
         const SizedBox(height: 14),
 
-        // Footnote
-        Center(
-          child: Text(
-            'Demo report · Current balance: 120 points',
-            style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
-              fontSize: 12,
-              color: AppColors.textSecondary,
+        // Footnote (demo only: the balance here is not real)
+        if (_demoControls) ...[
+          Center(
+            child: Text(
+              'Demo report · Current balance: 120 points',
+              style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+              ),
             ),
           ),
-        ),
+        ],
         const SizedBox(height: 20),
       ],
     );
@@ -549,25 +693,11 @@ class _ReportScreenState extends State<ReportScreen>
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(18),
-              child: Image.network(
-                _samplePhotoUrl,
-                height: 210,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => Container(
-                  height: 210,
-                  color: AppColors.primaryLight,
-                  alignment: Alignment.center,
-                  child: const Icon(
-                    Icons.image_outlined,
-                    size: 48,
-                    color: AppColors.primary,
-                  ),
-                ),
-              ),
+              child: _buildPhotoImage(210),
             ),
 
-            // Viewfinder Corner Brackets Overlay
+            // Viewfinder + scan line only while checking (hidden on error)
+            if (_checkError == null) ...[
             Positioned.fill(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -608,6 +738,7 @@ class _ReportScreenState extends State<ReportScreen>
                 },
               ),
             ),
+            ],
           ],
         ),
         const SizedBox(height: 8),
@@ -622,7 +753,7 @@ class _ReportScreenState extends State<ReportScreen>
             ),
             const SizedBox(width: 6),
             Text(
-              'Sample campus garden · 13 Oct, 9:41 AM',
+              _captureCaption(),
               style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
                 fontSize: 13,
                 color: AppColors.textSecondary,
@@ -632,79 +763,8 @@ class _ReportScreenState extends State<ReportScreen>
         ),
         const SizedBox(height: 16),
 
-        // Analyzing Card
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: AppColors.border, width: 1),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header with percentage
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Analyzing site details',
-                    style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const Text(
-                    '65%',
-                    style: TextStyle(
-                      fontFamily: AppTypography.fontFamily,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primaryDark,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Progress Bar
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: const LinearProgressIndicator(
-                  value: 0.65,
-                  minHeight: 7,
-                  backgroundColor: AppColors.primaryLight,
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Checklist Items
-              _buildChecklistItem(
-                icon: Icons.check_circle_outline,
-                iconColor: AppColors.primaryDark,
-                text: 'Photo received',
-                textColor: AppColors.textPrimary,
-              ),
-              const SizedBox(height: 12),
-              _buildChecklistItem(
-                icon: Icons.crop_free,
-                iconColor: AppColors.primaryDark,
-                text: 'Checking for standing water',
-                textColor: AppColors.textPrimary,
-              ),
-              const SizedBox(height: 12),
-              _buildChecklistItem(
-                icon: Icons.access_time,
-                iconColor: AppColors.textSecondary,
-                text: 'Checking for duplicate reports',
-                textColor: AppColors.textSecondary,
-              ),
-            ],
-          ),
-        ),
+        // Analyzing card (live progress, or an error with retry)
+        _buildAnalyzingCard(textTheme),
         const SizedBox(height: 14),
 
         // Points Info Highlight Banner
@@ -745,59 +805,206 @@ class _ReportScreenState extends State<ReportScreen>
         ),
         const SizedBox(height: 16),
 
-        // Simulation Decision Buttons (Instant toggle to test both approved and rejected outcomes)
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => setState(() => _currentStep = ReportFlowStep.approved),
-                icon: const Icon(Icons.check, size: 18),
-                label: const Text('Simulate Approved'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => setState(() => _currentStep = ReportFlowStep.rejected),
-                icon: const Icon(Icons.close, size: 18, color: AppColors.errorText),
-                label: const Text(
-                  'Simulate Rejected',
-                  style: TextStyle(color: AppColors.errorText),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: AppColors.errorText),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        // Footnote
-        Center(
-          child: Text(
-            'Illustrative checking state · Balance: 120 points',
-            style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
-              fontSize: 12,
-              color: AppColors.textSecondary,
-            ),
-          ),
-        ),
+        // Demo-only: jump to an outcome without running the AI check.
+        if (_demoControls) ..._buildDemoControls(textTheme),
         const SizedBox(height: 20),
       ],
     );
+  }
+
+  /// "Analyzing site details" card: progress while the check runs, or the
+  /// error with Try again / Retake photo when the check could not complete.
+  Widget _buildAnalyzingCard(TextTheme textTheme) {
+    final error = _checkError;
+    final validating = _checkPhase == CheckPhase.validating;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border, width: 1),
+      ),
+      child: error != null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.error_outline,
+                      color: AppColors.errorText,
+                      size: 24,
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Check not completed',
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  error,
+                  style: (textTheme.bodyMedium ?? AppTypography.body).copyWith(
+                    color: AppColors.textSecondary,
+                    fontSize: 14,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: _runCheck,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text(
+                      'Try again',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: OutlinedButton(
+                    onPressed: _resetToForm,
+                    style: OutlinedButton.styleFrom(
+                      backgroundColor: AppColors.surface,
+                      foregroundColor: AppColors.primaryDark,
+                      side: const BorderSide(color: AppColors.border),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text(
+                      'Retake photo',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Analyzing site details',
+                  style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Indeterminate progress: the AI gives no percentage.
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: const LinearProgressIndicator(
+                    minHeight: 7,
+                    backgroundColor: AppColors.primaryLight,
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                _buildChecklistItem(
+                  icon: Icons.check_circle_outline,
+                  iconColor: AppColors.primaryDark,
+                  text: 'Photo received',
+                  textColor: AppColors.textPrimary,
+                ),
+                const SizedBox(height: 12),
+                _buildChecklistItem(
+                  icon: validating ? Icons.crop_free : Icons.check_circle_outline,
+                  iconColor: AppColors.primaryDark,
+                  text: 'Checking for standing water',
+                  textColor: AppColors.textPrimary,
+                  busy: validating,
+                ),
+                const SizedBox(height: 12),
+                _buildChecklistItem(
+                  icon: validating ? Icons.access_time : Icons.crop_free,
+                  iconColor:
+                      validating ? AppColors.textSecondary : AppColors.primaryDark,
+                  text: 'Checking for duplicate reports',
+                  textColor:
+                      validating ? AppColors.textSecondary : AppColors.textPrimary,
+                  busy: !validating,
+                ),
+              ],
+            ),
+    );
+  }
+
+  List<Widget> _buildDemoControls(TextTheme textTheme) {
+    return [
+      Row(
+        children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => setState(() => _currentStep = ReportFlowStep.approved),
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Simulate Approved'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => setState(() => _currentStep = ReportFlowStep.rejected),
+              icon: const Icon(Icons.close, size: 18, color: AppColors.errorText),
+              label: const Text(
+                'Simulate Rejected',
+                style: TextStyle(color: AppColors.errorText),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppColors.errorText),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 12),
+      Center(
+        child: Text(
+          'Demo controls on · Illustrative states only',
+          style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
+            fontSize: 12,
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ),
+    ];
   }
 
   Widget _buildChecklistItem({
@@ -805,10 +1012,23 @@ class _ReportScreenState extends State<ReportScreen>
     required Color iconColor,
     required String text,
     required Color textColor,
+    bool busy = false,
   }) {
     return Row(
       children: [
-        Icon(icon, color: iconColor, size: 20),
+        busy
+            ? SizedBox(
+                width: 20,
+                height: 20,
+                child: Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: iconColor,
+                  ),
+                ),
+              )
+            : Icon(icon, color: iconColor, size: 20),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
@@ -900,22 +1120,7 @@ class _ReportScreenState extends State<ReportScreen>
             children: [
               ClipRRect(
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                child: Image.network(
-                  _samplePhotoUrl,
-                  height: 170,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    height: 170,
-                    color: AppColors.primaryLight,
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      Icons.image_outlined,
-                      size: 48,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
+                child: _buildPhotoImage(170),
               ),
               Padding(
                 padding: const EdgeInsets.all(16),
@@ -934,16 +1139,28 @@ class _ReportScreenState extends State<ReportScreen>
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Discarded tyre with standing water',
+                      _outcome?.validation.category.label ??
+                          'Discarded tyre with standing water',
                       style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                         color: AppColors.textPrimary,
                       ),
                     ),
+                    if (_outcome != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        _outcome!.decision.reason,
+                        style: (textTheme.bodyMedium ?? AppTypography.body).copyWith(
+                          fontSize: 14,
+                          color: AppColors.textPrimary,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Text(
-                      'Sample campus garden · 13 Oct, 9:41 AM',
+                      _captureCaption(),
                       style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
                         fontSize: 13,
                         color: AppColors.textSecondary,
@@ -981,9 +1198,11 @@ class _ReportScreenState extends State<ReportScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      '+10 Points Earned',
-                      style: TextStyle(
+                    Text(
+                      _outcome == null
+                          ? '+10 Points Earned'
+                          : 'Eligible for 10 points',
+                      style: const TextStyle(
                         fontFamily: AppTypography.fontFamily,
                         fontSize: 17,
                         fontWeight: FontWeight.bold,
@@ -992,7 +1211,9 @@ class _ReportScreenState extends State<ReportScreen>
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Updated balance: 130 points · Previously 120',
+                      _outcome == null
+                          ? 'Updated balance: 130 points · Previously 120'
+                          : 'Points are added when your report is submitted.',
                       style: TextStyle(
                         fontFamily: AppTypography.fontFamily,
                         fontSize: 13,
@@ -1012,7 +1233,7 @@ class _ReportScreenState extends State<ReportScreen>
           width: double.infinity,
           height: 50,
           child: ElevatedButton(
-            onPressed: () => context.go('/home'),
+            onPressed: () => context.go('/map'),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
@@ -1060,7 +1281,9 @@ class _ReportScreenState extends State<ReportScreen>
         // Footnote
         Center(
           child: Text(
-            'Illustrative report · Fictional location',
+            _outcome == null
+                ? 'Illustrative report · Fictional location'
+                : 'Checked by AI from a live photo and GPS location',
             style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
               fontSize: 12,
               color: AppColors.textSecondary,
@@ -1084,9 +1307,11 @@ class _ReportScreenState extends State<ReportScreen>
         const SizedBox(height: 8),
 
         // Tag
-        const Text(
-          'REPORT RESULT · REJECTED ALTERNATIVE',
-          style: TextStyle(
+        Text(
+          _outcome == null
+              ? 'REPORT RESULT · REJECTED ALTERNATIVE'
+              : 'REPORT RESULT · NOT APPROVED',
+          style: const TextStyle(
             fontFamily: AppTypography.fontFamily,
             fontSize: 12,
             fontWeight: FontWeight.bold,
@@ -1098,7 +1323,9 @@ class _ReportScreenState extends State<ReportScreen>
 
         // Subtitle
         Text(
-          'An alternative outcome from the 120-point balance.',
+          _outcome == null
+              ? 'An alternative outcome from the 120-point balance.'
+              : 'We checked your photo and location.',
           style: (textTheme.bodyMedium ?? AppTypography.body).copyWith(
             color: AppColors.textSecondary,
             fontSize: 14,
@@ -1118,6 +1345,15 @@ class _ReportScreenState extends State<ReportScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // The photo that was checked
+              if (_capture?.jpegBytes != null) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: _buildPhotoImage(150),
+                ),
+                const SizedBox(height: 14),
+              ],
+
               // Red Signal Slash Icon
               const Icon(
                 Icons.portable_wifi_off_outlined,
@@ -1137,7 +1373,8 @@ class _ReportScreenState extends State<ReportScreen>
               const SizedBox(height: 8),
 
               Text(
-                'Duplicate report. This photo and location match a site already submitted. No new points were awarded.',
+                _outcome?.decision.reason ??
+                    'Duplicate report. This photo and location match a site already submitted. No new points were awarded.',
                 style: (textTheme.bodyMedium ?? AppTypography.body).copyWith(
                   color: AppColors.textSecondary,
                   fontSize: 14,
@@ -1160,7 +1397,7 @@ class _ReportScreenState extends State<ReportScreen>
                     ),
                   ),
                   child: const Text(
-                    'Try Again',
+                    'Retake photo',
                     style: TextStyle(
                       fontFamily: AppTypography.fontFamily,
                       fontSize: 16,
@@ -1209,7 +1446,9 @@ class _ReportScreenState extends State<ReportScreen>
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Balance unchanged: 120 points',
+                      _outcome == null
+                          ? 'Balance unchanged: 120 points'
+                          : 'This photo was not approved for points.',
                       style: TextStyle(
                         fontFamily: AppTypography.fontFamily,
                         fontSize: 13,
@@ -1267,7 +1506,9 @@ class _ReportScreenState extends State<ReportScreen>
         // Footnote
         Center(
           child: Text(
-            'Illustrative rejection · Not part of the approved path',
+            _outcome == null
+                ? 'Illustrative rejection · Not part of the approved path'
+                : 'Retake the photo to try again',
             style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
               fontSize: 12,
               color: AppColors.textSecondary,

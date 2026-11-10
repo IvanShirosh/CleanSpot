@@ -11,6 +11,11 @@ class ReportModel {
   final DateTime createdAt;
   final DateTime lastConfirmedAt;
 
+  /// Set by the AI photo check; null on reports created before it existed.
+  final String? aiCategory;
+  final double? aiConfidence;
+  final String? aiReason;
+
   const ReportModel({
     required this.id,
     required this.reporterId,
@@ -21,6 +26,9 @@ class ReportModel {
     required this.confirmationCount,
     required this.createdAt,
     required this.lastConfirmedAt,
+    this.aiCategory,
+    this.aiConfidence,
+    this.aiReason,
   });
 
   factory ReportModel.fromMap(String id, Map<String, dynamic> map) {
@@ -36,6 +44,9 @@ class ReportModel {
       createdAt: created,
       lastConfirmedAt:
           (map['lastConfirmedAt'] as Timestamp?)?.toDate() ?? created,
+      aiCategory: map['aiCategory'] as String?,
+      aiConfidence: (map['aiConfidence'] as num?)?.toDouble(),
+      aiReason: map['aiReason'] as String?,
     );
   }
 
@@ -49,6 +60,9 @@ class ReportModel {
       'confirmationCount': confirmationCount,
       'createdAt': Timestamp.fromDate(createdAt),
       'lastConfirmedAt': Timestamp.fromDate(lastConfirmedAt),
+      if (aiCategory != null) 'aiCategory': aiCategory,
+      if (aiConfidence != null) 'aiConfidence': aiConfidence,
+      if (aiReason != null) 'aiReason': aiReason,
     };
   }
 }
