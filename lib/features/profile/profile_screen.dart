@@ -1,21 +1,16 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../app/theme_proposal.dart';
-import 'dummy_data.dart';
+import 'current_user.dart';
 import 'widgets/widgets.dart';
 
 /// CleanSpot Profile screen displaying active user stats, menu options,
 /// and authentication actions.
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
-
-  String _getInitials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty || parts[0].isEmpty) return 'U';
-    if (parts.length == 1) return parts[0][0].toUpperCase();
-    return '${parts[0][0]}${parts[parts.length - 1][0]}'.toUpperCase();
-  }
 
   Future<void> _showSignOutDialog(BuildContext context) {
     return showDialog<void>(
@@ -55,9 +50,15 @@ class ProfileScreen extends StatelessWidget {
               ),
             ),
             TextButton(
-              onPressed: () {
+              onPressed: () async {
                 Navigator.of(ctx).pop();
-                // TODO: Manuja's auth hook (e.g. FirebaseAuth.instance.signOut())
+                // The router redirects to /login once the user is signed out.
+                await FirebaseAuth.instance.signOut();
+                try {
+                  await GoogleSignIn.instance.signOut();
+                } catch (_) {
+                  // Not signed in with Google; nothing to clear.
+                }
               },
               child: Text(
                 'Sign out',
@@ -76,7 +77,8 @@ class ProfileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final initials = _getInitials(dummyUser.name);
+    final user = CurrentUser.fromAuth();
+    final initials = user.initials;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -103,12 +105,12 @@ class ProfileScreen extends StatelessWidget {
                     CircleAvatar(
                       radius: 42,
                       backgroundColor: AppColors.primaryLight,
-                      backgroundImage: dummyUser.photoUrl != null &&
-                              dummyUser.photoUrl!.isNotEmpty
-                          ? NetworkImage(dummyUser.photoUrl!)
+                      backgroundImage: user.photoUrl != null &&
+                              user.photoUrl!.isNotEmpty
+                          ? NetworkImage(user.photoUrl!)
                           : null,
-                      child: dummyUser.photoUrl == null ||
-                              dummyUser.photoUrl!.isEmpty
+                      child: user.photoUrl == null ||
+                              user.photoUrl!.isEmpty
                           ? Text(
                               initials,
                               style: (textTheme.titleLarge ?? AppTypography.heading).copyWith(
@@ -121,7 +123,7 @@ class ProfileScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      dummyUser.name,
+                      user.name,
                       style: (textTheme.titleLarge ?? AppTypography.heading).copyWith(
                         color: AppColors.textPrimary,
                         fontSize: 20,
@@ -130,7 +132,7 @@ class ProfileScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      dummyUser.email,
+                      user.email,
                       style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
                         color: AppColors.textSecondary,
                         fontSize: 13,
@@ -142,10 +144,12 @@ class ProfileScreen extends StatelessWidget {
               const SizedBox(height: 24),
 
               // Points Card
-              PointsCard(
-                label: 'YOUR POINTS',
-                points: dummyUser.points,
-                caption: 'Earn more by reporting breeding sites.',
+              UserPoints(
+                builder: (context, points) => PointsCard(
+                  label: 'YOUR POINTS',
+                  points: points,
+                  caption: 'Earn more by reporting breeding sites.',
+                ),
               ),
               const SizedBox(height: 20),
 

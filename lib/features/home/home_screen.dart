@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme_proposal.dart';
+import '../profile/current_user.dart';
 import '../profile/dummy_data.dart';
 import '../profile/widgets/widgets.dart';
 
@@ -12,7 +13,8 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final firstName = dummyUser.name.split(' ').first;
+    final user = CurrentUser.fromAuth();
+    final firstName = user.firstName;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -57,15 +59,15 @@ class HomeScreen extends StatelessWidget {
                     child: CircleAvatar(
                       radius: 24,
                       backgroundColor: AppColors.primaryLight,
-                      backgroundImage: dummyUser.photoUrl != null &&
-                              dummyUser.photoUrl!.isNotEmpty
-                          ? NetworkImage(dummyUser.photoUrl!)
+                      backgroundImage: user.photoUrl != null &&
+                              user.photoUrl!.isNotEmpty
+                          ? NetworkImage(user.photoUrl!)
                           : null,
-                      child: dummyUser.photoUrl == null ||
-                              dummyUser.photoUrl!.isEmpty
-                          ? const Text(
-                              'CS',
-                              style: TextStyle(
+                      child: user.photoUrl == null ||
+                              user.photoUrl!.isEmpty
+                          ? Text(
+                              user.initials,
+                              style: const TextStyle(
                                 fontFamily: AppTypography.fontFamily,
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.primaryDark,
@@ -104,12 +106,14 @@ class HomeScreen extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.baseline,
                       textBaseline: TextBaseline.alphabetic,
                       children: [
-                        Text(
-                          '${dummyUser.points}',
-                          style: (textTheme.displayLarge ?? AppTypography.pointsBig).copyWith(
-                            fontSize: 36,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primaryDark,
+                        UserPoints(
+                          builder: (context, points) => Text(
+                            '$points',
+                            style: (textTheme.displayLarge ?? AppTypography.pointsBig).copyWith(
+                              fontSize: 36,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primaryDark,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
