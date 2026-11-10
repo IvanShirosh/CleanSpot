@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme_proposal.dart';
+import '../ai_validation/capture_result.dart';
+import '../ai_validation/capture_service.dart';
 
 /// The 4 step states of the AI report verification workflow:
 /// 1. [form]      - Image 1: "Report a Breeding Site"
@@ -52,7 +54,29 @@ class _ReportScreenState extends State<ReportScreen>
     super.dispose();
   }
 
+  // Live camera photo + GPS fix from captureReportPhoto(); null until taken.
+  CaptureResult? _capture;
+  bool _capturing = false;
+
+  Future<void> _takePhoto() async {
+    setState(() => _capturing = true);
+    final result = await captureReportPhoto();
+    if (!mounted) return;
+    setState(() {
+      _capturing = false;
+      if (result.isOk) _capture = result;
+    });
+    if (!result.isOk && !result.wasCancelled) _showMessage(result.message!);
+  }
+
+  void _showMessage(String text) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
   void _submitReport() {
+    if (_capture?.isOk != true) return;
     setState(() {
       _currentStep = ReportFlowStep.checking;
     });
@@ -60,6 +84,7 @@ class _ReportScreenState extends State<ReportScreen>
 
   void _resetToForm() {
     setState(() {
+      _capture = null;
       _currentStep = ReportFlowStep.form;
     });
   }
@@ -262,9 +287,9 @@ class _ReportScreenState extends State<ReportScreen>
                       color: AppColors.textPrimary,
                     ),
                   ),
-                  const Text(
-                    '1 photo added',
-                    style: TextStyle(
+                  Text(
+                    _capture == null ? 'No photo yet' : '1 photo added',
+                    style: const TextStyle(
                       fontFamily: AppTypography.fontFamily,
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -275,25 +300,26 @@ class _ReportScreenState extends State<ReportScreen>
               ),
               const SizedBox(height: 12),
 
-              // Tyre image preview
+              // Live photo preview (placeholder until a photo is taken)
               ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: Image.network(
-                  _samplePhotoUrl,
-                  height: 170,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    height: 170,
-                    color: AppColors.primaryLight,
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      Icons.image_outlined,
-                      size: 48,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ),
+                child: _capture == null
+                    ? Container(
+                        height: 170,
+                        color: AppColors.primaryLight,
+                        alignment: Alignment.center,
+                        child: const Icon(
+                          Icons.photo_camera_outlined,
+                          size: 48,
+                          color: AppColors.primary,
+                        ),
+                      )
+                    : Image.memory(
+                        _capture!.jpegBytes!,
+                        height: 170,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                      ),
               ),
               const SizedBox(height: 14),
 
@@ -302,7 +328,7 @@ class _ReportScreenState extends State<ReportScreen>
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: () {},
+                      onPressed: _capturing ? null : _takePhoto,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.primaryDark,
                         side: const BorderSide(color: AppColors.border, width: 1),
@@ -311,20 +337,29 @@ class _ReportScreenState extends State<ReportScreen>
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 13),
                       ),
-                      child: const Text(
-                        'Camera',
-                        style: TextStyle(
-                          fontFamily: AppTypography.fontFamily,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+                      child: _capturing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text(
+                              'Camera',
+                              style: TextStyle(
+                                fontFamily: AppTypography.fontFamily,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: () {},
+                      // Verified reports must be live photos.
+                      onPressed: () => _showMessage(
+                        'Please use the camera so your report can be verified',
+                      ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.primaryDark,
                         side: const BorderSide(color: AppColors.border, width: 1),
@@ -411,7 +446,9 @@ class _ReportScreenState extends State<ReportScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Sample campus garden',
+                            _capture == null
+                                ? 'Location not added yet'
+                                : 'Location added',
                             style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
                               fontSize: 15,
                               fontWeight: FontWeight.bold,
@@ -420,7 +457,11 @@ class _ReportScreenState extends State<ReportScreen>
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Location added · Illustrative map',
+                            _capture == null
+                                ? 'Take a photo to add your location'
+                                : '${_capture!.latitude!.toStringAsFixed(5)}, '
+                                    '${_capture!.longitude!.toStringAsFixed(5)}'
+                                    ' · ±${_capture!.accuracyMeters!.round()} m',
                             style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
                               fontSize: 12,
                               color: AppColors.textSecondary,
@@ -462,10 +503,13 @@ class _ReportScreenState extends State<ReportScreen>
           width: double.infinity,
           height: 52,
           child: ElevatedButton(
-            onPressed: _submitReport,
+            // Enabled only after a camera photo with a valid GPS fix.
+            onPressed: _capture?.isOk == true ? _submitReport : null,
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
+              disabledBackgroundColor: AppColors.border,
+              disabledForegroundColor: AppColors.textSecondary,
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
