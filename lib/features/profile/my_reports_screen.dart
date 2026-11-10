@@ -5,6 +5,7 @@ import 'dummy_data.dart';
 import 'widgets/widgets.dart';
 
 /// Screen displaying submitted dengue breeding site reports with filter options.
+/// Matches Figma / Mockup Image 5 ("My Reports").
 class MyReportsScreen extends StatefulWidget {
   final List<DummyReport> reports;
 
@@ -18,14 +19,11 @@ class MyReportsScreen extends StatefulWidget {
 }
 
 class _MyReportsScreenState extends State<MyReportsScreen> {
-  String _selectedFilter = 'all'; // 'all' | 'pending' | 'reviewed'
+  String _selectedFilter = 'all'; // 'all' | 'in_progress'
 
   List<DummyReport> get _filteredReports {
-    if (_selectedFilter == 'pending') {
-      return widget.reports.where((r) => r.isPending).toList();
-    }
-    if (_selectedFilter == 'reviewed') {
-      return widget.reports.where((r) => r.isReviewed).toList();
+    if (_selectedFilter == 'in_progress') {
+      return widget.reports.where((r) => r.isInProgress).toList();
     }
     return widget.reports;
   }
@@ -35,15 +33,15 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
 
     return InkWell(
       onTap: () => setState(() => _selectedFilter = value),
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(22),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected ? AppColors.primaryLight : AppColors.surface,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(22),
           border: Border.all(
             color: isSelected ? AppColors.primary : AppColors.border,
-            width: 1,
+            width: isSelected ? 1.5 : 1.0,
           ),
         ),
         child: Text(
@@ -61,52 +59,122 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
 
   Widget _buildReportCard(BuildContext context, DummyReport report) {
     final textTheme = Theme.of(context).textTheme;
+    final isPositivePoints = report.pointsText?.startsWith('+') ?? false;
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: AppColors.border, width: 1),
       ),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  report.type,
-                  style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              StatusChip.fromStatus(
-                text: report.status,
-                status: report.status,
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            report.location,
-            style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
-              fontSize: 13,
-              color: AppColors.textSecondary,
+          // Left thumbnail
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: 68,
+              height: 68,
+              color: AppColors.primaryLight,
+              child: report.imageUrl != null
+                  ? Image.network(
+                      report.imageUrl!,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const Icon(
+                        Icons.image_outlined,
+                        color: AppColors.primary,
+                        size: 28,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.image_outlined,
+                      color: AppColors.primary,
+                      size: 28,
+                    ),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            report.dateText,
-            style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
-              fontSize: 12,
-              color: AppColors.textSecondary,
+          const SizedBox(width: 12),
+
+          // Details column
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title and Status Chip
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        report.type,
+                        style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    StatusChip.fromStatus(
+                      text: report.status,
+                      status: report.status,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+
+                // Location
+                Text(
+                  report.location,
+                  style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+
+                // Date
+                Text(
+                  report.dateText,
+                  style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+
+                // Bottom row: AI Note + Points
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        report.aiNote ?? 'AI: Queued for validation.',
+                        style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      report.pointsText ?? 'Not awarded yet',
+                      style: TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: isPositivePoints
+                            ? AppColors.primaryDark
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ],
@@ -172,78 +240,74 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Top Bar with back arrow
-              Row(
-                children: [
-                  InkWell(
-                    onTap: () => Navigator.of(context).maybePop(),
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.border, width: 1),
-                      ),
-                      child: const Icon(
-                        Icons.arrow_back,
-                        size: 20,
-                        color: AppColors.textPrimary,
-                      ),
+              // Top Bar with back arrow if navigator can pop
+              if (Navigator.of(context).canPop()) ...[
+                InkWell(
+                  onTap: () => Navigator.of(context).maybePop(),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.border, width: 1),
                     ),
-                  ),
-                  const SizedBox(width: 14),
-                  Text(
-                    'My Reports',
-                    style: (textTheme.headlineSmall ?? AppTypography.title).copyWith(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
+                    child: const Icon(
+                      Icons.arrow_back,
+                      size: 20,
                       color: AppColors.textPrimary,
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
+                ),
+                const SizedBox(height: 12),
+              ],
 
-              // Subtitle
-              Padding(
-                padding: const EdgeInsets.only(left: 4),
-                child: Text(
-                  'Small actions, recorded with care.',
-                  style: (textTheme.bodyMedium ?? AppTypography.body).copyWith(
-                    color: AppColors.textSecondary,
-                    fontSize: 14,
-                  ),
+              // Screen Title
+              Text(
+                'My Reports',
+                style: (textTheme.headlineSmall ?? AppTypography.title).copyWith(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 6),
 
-              // Info note
-              InfoNote(
-                text: '${widget.reports.length} sample reports · Fictional locations',
+              // Subtitle
+              Text(
+                'Follow your reports from upload to validation.',
+                style: (textTheme.bodyMedium ?? AppTypography.body).copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 4),
+
+              // Sub-text
+              Text(
+                '${widget.reports.length} sample reports · Fictional locations',
+                style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                ),
               ),
               const SizedBox(height: 16),
 
               // Filter Chips
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    _buildFilterChip('All reports', 'all'),
-                    const SizedBox(width: 8),
-                    _buildFilterChip('Pending', 'pending'),
-                    const SizedBox(width: 8),
-                    _buildFilterChip('Reviewed', 'reviewed'),
-                  ],
-                ),
+              Row(
+                children: [
+                  _buildFilterChip('All reports', 'all'),
+                  const SizedBox(width: 10),
+                  _buildFilterChip('In progress', 'in_progress'),
+                ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 18),
 
               // Report Cards or Empty State
               if (filtered.isEmpty)
@@ -258,14 +322,20 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
                     return _buildReportCard(context, filtered[index]);
                   },
                 ),
-              const SizedBox(height: 24),
-
-              // Mint TipBanner at the bottom
-              const TipBanner(
-                text:
-                    'Reports are reviewed before appearing as valid markers on the map. A clearer photo or location may be requested.',
-              ),
               const SizedBox(height: 20),
+
+              // Footnote
+              Center(
+                child: Text(
+                  'Only valid reports earn 10 points and appear on the map.',
+                  textAlign: TextAlign.center,
+                  style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
             ],
           ),
         ),
