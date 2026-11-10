@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -8,6 +10,15 @@ import 'capture_result.dart';
 
 /// How long to wait for a GPS fix after the photo is taken.
 const Duration kGpsTimeout = Duration(seconds: 15);
+
+/// Debug-only test hook: when set, [captureReportPhoto] skips the camera and
+/// uses this bundled asset as the photo (the real location checks and GPS fix
+/// still run). Ignored in profile and release builds. Empty = normal camera.
+///
+///   flutter run --dart-define=DEBUG_CAPTURE_ASSET=assets/dev_samples/drain.jpg
+const String _debugCaptureAsset = String.fromEnvironment(
+  'DEBUG_CAPTURE_ASSET',
+);
 
 /// Takes a live camera photo and a GPS fix for a report.
 ///
@@ -46,28 +57,41 @@ Future<CaptureResult> captureReportPhoto() async {
       );
     }
 
-    // 2. Camera (live photo only).
-    final XFile? photo;
-    try {
-      photo = await ImagePicker().pickImage(
-        source: ImageSource.camera,
-        maxWidth: 1280,
-        imageQuality: 80,
-        requestFullMetadata: false,
-      );
-    } catch (_) {
-      return const CaptureResult.failure(
-        CaptureFailure.cameraFailed,
-        'Could not open the camera. Check that CleanSpot is allowed to use it.',
-      );
+    // 2. Photo: the camera (live photo only), or the debug test asset.
+    final Uint8List bytes;
+    if (kDebugMode && _debugCaptureAsset.isNotEmpty) {
+      try {
+        bytes = (await rootBundle.load(_debugCaptureAsset)).buffer.asUint8List();
+      } catch (_) {
+        return CaptureResult.failure(
+          CaptureFailure.cameraFailed,
+          'DEBUG_CAPTURE_ASSET could not be loaded: $_debugCaptureAsset',
+        );
+      }
+    } else {
+      final XFile? photo;
+      try {
+        photo = await ImagePicker().pickImage(
+          source: ImageSource.camera,
+          maxWidth: 1280,
+          imageQuality: 80,
+          requestFullMetadata: false,
+        );
+      } catch (_) {
+        return const CaptureResult.failure(
+          CaptureFailure.cameraFailed,
+          'Could not open the camera. Check that CleanSpot is allowed to use '
+          'it.',
+        );
+      }
+      if (photo == null) {
+        return const CaptureResult.failure(
+          CaptureFailure.cancelled,
+          'No photo was taken.',
+        );
+      }
+      bytes = await photo.readAsBytes();
     }
-    if (photo == null) {
-      return const CaptureResult.failure(
-        CaptureFailure.cancelled,
-        'No photo was taken.',
-      );
-    }
-    final Uint8List bytes = await photo.readAsBytes();
     if (!looksLikeJpeg(bytes)) {
       return const CaptureResult.failure(
         CaptureFailure.notJpeg,
