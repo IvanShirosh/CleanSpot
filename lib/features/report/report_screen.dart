@@ -11,6 +11,7 @@ import '../../models/report_model.dart';
 import '../../services/firestore_service.dart';
 import '../ai_validation/capture_result.dart';
 import '../ai_validation/capture_service.dart';
+import '../ai_validation/geohash.dart' as geohash;
 import '../ai_validation/report_check_controller.dart';
 import '../ai_validation/report_outcome.dart';
 
@@ -201,6 +202,8 @@ class _ReportScreenState extends State<ReportScreen>
         description: '',
         status: isEligible ? 'valid' : 'rejected',
         location: GeoPoint(lat, lng),
+        // Precision 9 with our encoder, so the duplicate check can find it.
+        geohash: geohash.encode(lat, lng, 9),
         createdAt: DateTime.now(),
         lastConfirmedAt: DateTime.now(),
         aiCategory: outcome.validation.category.name,

@@ -61,6 +61,9 @@ class FirestoreService {
 
     final reportData = report.toMap();
     reportData['photoId'] = reportId;
+    // Server time, not the phone's clock (the duplicate check's 7-day window
+    // relies on it).
+    reportData['createdAt'] = FieldValue.serverTimestamp();
     batch.set(reportDoc, reportData);
 
     if (photoBase64 != null && photoBase64.isNotEmpty) {
