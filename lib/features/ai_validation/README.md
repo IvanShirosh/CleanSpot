@@ -3,9 +3,13 @@
 Checks whether a report photo shows a possible dengue mosquito breeding site,
 using Gemini through Firebase AI Logic (Gemini Developer API).
 
-Camera, GPS, the AI check, the duplicate check, the decision and the Report
-screen flow are done. The Report screen also saves the result and awards points
-(see "Saving the result").
+The feature is complete: live camera photo and GPS, the AI check, the duplicate
+check, the decision, and the Report screen, which saves the result and awards
+points (see "Saving the result").
+
+Settings live in `ai_config.dart`: model `kAiModelName`, request timeout
+`kAiRequestTimeout` (30 s) and minimum confidence `kMinConfidence` (0.7). The
+GPS limit is `CaptureResult.maxAccuracyMeters` (50 m).
 
 ## What is here
 
@@ -126,13 +130,37 @@ by default. Show them for demos with:
 flutter run --dart-define=DEMO_CONTROLS=true
 ```
 
-`validatePhoto` never throws. Any failure (network, timeout, quota, App Check
-rejection, malformed reply) returns `ValidationResult.error(...)`, which is
-never a breeding site and so can never lead to a verified report.
+## Failures, limits and security
 
-The checks run on the phone, so a determined user could bypass them. That is
-acceptable for this coursework project; real enforcement would need Firestore
-rules or a server function.
+- `validatePhoto` never throws. Any failure (network, timeout, quota, App Check
+  rejection, malformed reply) returns `ValidationResult.error(...)`, which is
+  never a breeding site and so can never lead to a verified report.
+- In debug builds, a failed check is logged as `Report check failed: <detail>`
+  and a failed save as `Saving the report failed: <error>`
+  (`adb logcat -d | grep -E "Report check failed|Saving the report failed"`).
+  Nothing else is logged.
+- **The duplicate check is location-based only.** Photos are never compared. A
+  second report within 20 m of a valid report from the last 7 days is
+  rejected, even from another user or another angle. Two different sites less
+  than 20 m apart count as one. GPS may be off by up to 50 m, so two reports of
+  the same site can occasionally both be approved.
+- The checks run on the phone, so a determined user could bypass them. That is
+  acceptable for this coursework project; real enforcement would need Firestore
+  rules or a server function.
+
+## Firebase console setup
+
+- **App Check:** Firebase AI Logic is enforced by App Check.
+  - Debug builds use the debug provider. Every developer install needs its
+    token registered (see "Live test" below).
+  - Release builds use **Play Integrity** on Android (App Attest on iOS). Before
+    a release or demo build, register Play Integrity for the Android app under
+    App Check > Apps, with the app's SHA-256 signing fingerprint. Without it,
+    every AI check in a release build fails.
+- **Firestore rules:** signed-in users must be able to read `reports` (for the
+  duplicate check) and write `reports`, `reportPhotos` and their own points.
+  If reads are denied, every check ends on **Try again**.
+- **Indexes:** none to add (see "Duplicate check").
 
 ## Testing
 
@@ -152,22 +180,27 @@ are rejected until that token is registered in the Firebase console.
    ```bash
    flutter run -d <deviceId>
    ```
-2. Find your debug token. Look in the `flutter run` output for a line like
-   ```
-   Enter this debug secret into the allow list in the Firebase Console for your project: <uuid>
-   ```
-   If it is not in the `flutter run` output, read it from the Android log:
+2. Find your debug token. On Android it is in the log as
+   `Firebase App Check debug token: <uuid>`:
    ```bash
-   adb logcat -c            # clear the log, then restart the app
-   adb logcat -d | grep -i "debug secret"        # Git Bash
-   adb logcat -d | Select-String "debug secret"  # PowerShell
+   adb logcat -d | grep "App Check debug token"           # macOS / Git Bash
+   adb logcat -d | Select-String "App Check debug token"  # PowerShell
    ```
-   On iOS, search the Xcode console for `App Check debug token`.
-3. **Send the token privately to the branch owner (Manuja) so they can register
-   it** under Firebase console > App Check > Apps > Manage debug tokens. Do not
-   commit it, paste it into code, or post it in a public place.
-4. The token changes if you uninstall the app or clear its data. Repeat the
-   steps above if the AI calls start failing with App Check errors.
+   If nothing prints, close and reopen the app, then try again. On iOS, search
+   the Xcode console for `App Check debug token`.
+3. Register it under Firebase console > App Check > Apps > **clean_spot
+   (android)** > ⋮ > Manage debug tokens > Add debug token. Paste **only the
+   UUID** into Value (anything else gives "must be a version 4 UUID"). Do not
+   click "Generate token". If you do not have console access, send the token
+   privately to Manuja. Do not commit it, paste it into code, or post it in a
+   public place.
+4. Wait a minute or two, then fully close and reopen the app.
+   - Until the token is registered, checks fail with
+     `403 App attestation failed`.
+   - Retrying quickly then gives `Too many attempts`; wait a few minutes before
+     trying again.
+   - The token changes if you uninstall the app or clear its data. Repeat these
+     steps if checks start failing with App Check errors.
 5. Put your own `.jpg` or `.jpeg` photos in `assets/dev_samples/`. The folder
    is tracked only through `.gitkeep`; the photos are git-ignored and stay on
    your machine. Good test set: a tyre or pot holding water, a clean room, a
@@ -193,20 +226,25 @@ override:
 flutter run -d <deviceId> --dart-define=DEBUG_CAPTURE_ASSET=assets/dev_samples/drain.jpg
 ```
 
-With this set, tapping **Camera** skips the camera and uses that bundled asset as
+This works on a real phone too, if you want to test with a fixed photo. With this set, tapping **Camera** skips the camera and uses that bundled asset as
 the photo. Location services, location permission and the GPS fix (within 50 m)
 are still checked for real, so set a location on the emulator first. It only
 works in debug builds (`kDebugMode`) and is ignored in profile and release
 builds. Leave the flag out for the normal camera. The photo must be a `.jpg`
 inside `assets/dev_samples/` (git-ignored, so use your own).
 
-In debug builds the check also prints timings and the AI result, prefixed
-`AI TIMING` and `AI RESULT`:
-
-```bash
-adb logcat -d | grep -E "AI TIMING|AI RESULT"
-```
-
 Sample photos must be **real JPEG data**. A web download saved as `.jpg` is often
 really WebP; the app rejects those ("The photo could not be read"). Check with
-`file assets/dev_samples/*.jpg` and convert if needed.
+`file assets/dev_samples/*.jpg` and convert if needed (on macOS:
+`sips -s format jpeg in.png --out assets/dev_samples/photo.jpg`).
+
+### Manual test checklist
+
+1. Report a real breeding site (e.g. a container holding water). Expect
+   **Approved** and +10 points. In Firestore, the new `reports` document has a
+   9-character `geohash`, `status: "valid"` and a server `createdAt`, and
+   `reportPhotos/{id}` exists.
+2. Report again within 20 m. Expect **Rejected** as a duplicate, with no points.
+3. Photograph something unrelated (a clean desk, a selfie). Expect **Rejected**
+   as not a breeding site.
+4. Turn on airplane mode and submit. Expect **Try again**; nothing is saved.
