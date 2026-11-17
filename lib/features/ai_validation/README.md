@@ -17,7 +17,7 @@ submission owner (see "Hook for report submission and points").
 | `validation_result.dart` | `ValidationResult` and `SiteCategory`. |
 | `capture_service.dart` | `captureReportPhoto()`: live camera photo plus a GPS fix. |
 | `capture_result.dart` | `CaptureResult` (photo + GPS, or why it failed). |
-| `duplicate_check.dart` | `isDuplicate(lat, lng)`: is there an approved report within 20 m from the last 7 days? See "Duplicate check". |
+| `duplicate_check.dart` | `isDuplicate(lat, lng)`: is there a valid report within 20 m from the last 7 days? See "Duplicate check". |
 | `geohash.dart` | `encode(lat, lng, precision)`, `bounds(hash)`, `neighbours(hash)` (the 8 surrounding cells). No package. |
 | `haversine.dart` | `haversineMeters(lat1, lng1, lat2, lng2)`. |
 | `report_decision.dart` | `decide(ai, capture, isDuplicate)`: the eligibility rule. |
@@ -62,7 +62,7 @@ What the submission owner should do:
 
 - Only save reports with `outcome.eligible == true`. A rejected photo is not
   saved; the user retakes it.
-- Save an eligible report with `status: 'approved'` (automatic, no manual
+- Save an eligible report with `status: 'valid'` (automatic, no manual
   review) and fill `aiCategory` (`validation.category.wireValue`),
   `aiConfidence` and `aiReason` from `outcome.validation`. These optional fields
   are on `ReportModel` and documented in `docs/DATA_MODEL.md`.
@@ -72,9 +72,9 @@ What the submission owner should do:
   - `geohash`: `encode(outcome.capture.latitude!, outcome.capture.longitude!, 9)`
     from `lib/features/ai_validation/geohash.dart` (our encoder, precision 9).
   - `createdAt`: `FieldValue.serverTimestamp()`. Do not use the phone's
-    clock. Note that `ReportModel.toMap()` writes `Timestamp.fromDate(createdAt)`,
-    so override that field when you write the document.
-  - `status`: `'approved'`.
+    clock. `FirestoreService.submitReport` does this (it overrides the
+    `Timestamp.fromDate(createdAt)` from `ReportModel.toMap()`).
+  - `status`: `'valid'` (the team's accepted status, see `docs/DATA_MODEL.md`).
   - `location`: `GeoPoint(latitude, longitude)` (the same capture fix).
 - The Approved screen says "Eligible for 10 points"; actually awarding the
   points is up to the submission/points owner.
@@ -90,7 +90,7 @@ What the submission owner should do:
    come from the **server only**. Offline, the queries fail; they do not
    silently use the cache.
 3. Filters the results on the phone (`matchesDuplicate`): `status ==
-   'approved'`, `createdAt` within the last 7 days, and Haversine distance
+   'valid'`, `createdAt` within the last 7 days, and Haversine distance
    ≤ 20 m from `location`. Documents missing `createdAt` or `location` are
    ignored.
 4. Returns true if anything matches. If any query fails it **throws**, and the

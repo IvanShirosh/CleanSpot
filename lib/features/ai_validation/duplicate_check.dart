@@ -11,8 +11,9 @@ const String fieldStatus = 'status';
 const String fieldCreatedAt = 'createdAt';
 const String fieldLocation = 'location';
 
-/// Only approved reports count as duplicates.
-const String approvedStatus = 'approved';
+/// Only accepted reports count as duplicates. The Report screen saves an
+/// eligible report with status 'valid' (see docs/DATA_MODEL.md).
+const String validStatus = 'valid';
 
 /// Precision of the query cells. A precision-6 cell is about 1.2 km x 0.6 km,
 /// so the cell plus its 8 neighbours always covers a 20 m radius.
@@ -39,7 +40,7 @@ bool matchesDuplicate(
   double longitude,
   DateTime now,
 ) {
-  if (data[fieldStatus] != approvedStatus) return false;
+  if (data[fieldStatus] != validStatus) return false;
 
   final createdAt = data[fieldCreatedAt];
   if (createdAt is! Timestamp) return false;
@@ -56,7 +57,7 @@ bool matchesDuplicate(
   return distance <= duplicateRadiusMeters;
 }
 
-/// Whether an approved report was created within the last 7 days within
+/// Whether a valid report was created within the last 7 days within
 /// 20 m of this point.
 ///
 /// Runs one range query per candidate cell (in parallel) on `geohash`, then

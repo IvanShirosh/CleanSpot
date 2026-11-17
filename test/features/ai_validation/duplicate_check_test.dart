@@ -10,7 +10,7 @@ void main() {
   final now = DateTime(2026, 11, 13, 12);
 
   Map<String, dynamic> report({
-    String status = 'approved',
+    String status = 'valid',
     Object? createdAt,
     Object? location,
   }) => {
@@ -23,12 +23,12 @@ void main() {
   test('field names match ReportModel.toMap()', () {
     final map = ReportModel(
       id: 'x',
-      reporterId: 'u',
-      photoUrl: '',
+      uid: 'u',
+      lat: 0,
+      lng: 0,
       location: const GeoPoint(0, 0),
       geohash: 's00000000',
-      status: 'approved',
-      confirmationCount: 0,
+      status: 'valid',
       createdAt: now,
       lastConfirmedAt: now,
     ).toMap();
@@ -40,7 +40,7 @@ void main() {
     ]) {
       expect(map.containsKey(f), isTrue, reason: f);
     }
-    expect(map[fieldStatus], approvedStatus);
+    expect(map[fieldStatus], validStatus);
   });
 
   group('candidatePrefixes', () {
@@ -58,11 +58,15 @@ void main() {
   });
 
   group('matchesDuplicate', () {
-    test('approved, recent, same spot -> duplicate', () {
+    test('valid, recent, same spot -> duplicate', () {
       expect(matchesDuplicate(report(), lat, lng, now), isTrue);
     });
 
-    test('pending or rejected -> not a duplicate', () {
+    test('pending, rejected or old "approved" -> not a duplicate', () {
+      expect(
+        matchesDuplicate(report(status: 'approved'), lat, lng, now),
+        isFalse,
+      );
       expect(
         matchesDuplicate(report(status: 'pending'), lat, lng, now),
         isFalse,
@@ -101,7 +105,7 @@ void main() {
     test('missing or wrongly typed fields -> not counted', () {
       expect(
         matchesDuplicate(
-          {'status': 'approved', 'location': const GeoPoint(lat, lng)},
+          {'status': 'valid', 'location': const GeoPoint(lat, lng)},
           lat,
           lng,
           now,
@@ -110,7 +114,7 @@ void main() {
       );
       expect(
         matchesDuplicate(
-          {'status': 'approved', 'createdAt': Timestamp.fromDate(now)},
+          {'status': 'valid', 'createdAt': Timestamp.fromDate(now)},
           lat,
           lng,
           now,
