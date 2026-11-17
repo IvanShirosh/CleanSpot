@@ -1,4 +1,5 @@
 import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -9,6 +10,7 @@ import 'package:image/image.dart' as img;
 import '../../app/theme_proposal.dart';
 import '../../models/report_model.dart';
 import '../../services/firestore_service.dart';
+import '../../services/report_write_plan.dart';
 import '../ai_validation/capture_result.dart';
 import '../ai_validation/capture_service.dart';
 import '../ai_validation/geohash.dart' as geohash;
@@ -30,6 +32,9 @@ enum ReportFlowStep {
   approved,
   rejected,
 }
+
+/// Progress of saving the checked report to Firestore.
+enum _SaveStatus { idle, saving, saved, failed }
 
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key, this.onDecision});
@@ -141,92 +146,117 @@ class _ReportScreenState extends State<ReportScreen>
       _currentStep =
           outcome.eligible ? ReportFlowStep.approved : ReportFlowStep.rejected;
     });
-    _saveReportToFirestore(outcome);
+    _beginSave(outcome);
     widget.onDecision?.call(outcome);
   }
 
-  Future<void> _saveReportToFirestore(ReportOutcome outcome) async {
-    final capture = outcome.capture;
-    final jpegBytes = capture.jpegBytes;
-    if (jpegBytes == null) return;
+  // Saving the checked report (separate from the AI check, so Retry only
+  // re-runs the save). One report id and one compressed photo per outcome: a
+  // retry reuses both, so it can never create a second report or award a second
+  // set of points.
+  _SaveStatus _saveStatus = _SaveStatus.idle;
+  String? _reportId;
+  String? _photoBase64;
+  int _saveToken = 0; // ignores the result of a save that was abandoned
 
+  void _beginSave(ReportOutcome outcome) {
+    _reportId = null;
+    _photoBase64 = null;
+    _saveOutcome(outcome);
+  }
+
+  void _retrySave() {
+    final outcome = _outcome;
+    if (outcome != null) _saveOutcome(outcome);
+  }
+
+  /// Compresses to max 800px / 70% JPEG, capped under 300 KB, as Base64.
+  String _compressToBase64(Uint8List jpegBytes) {
+    try {
+      final decoded = img.decodeImage(jpegBytes);
+      if (decoded == null) return base64Encode(jpegBytes);
+      int targetDim = 800;
+      img.Image resized = decoded;
+      if (decoded.width > targetDim || decoded.height > targetDim) {
+        resized = decoded.width >= decoded.height
+            ? img.copyResize(decoded, width: targetDim)
+            : img.copyResize(decoded, height: targetDim);
+      }
+      int quality = 70;
+      List<int> compressed = img.encodeJpg(resized, quality: quality);
+      const int maxBytes = 300 * 1024;
+      while (compressed.length > maxBytes && quality > 20) {
+        quality -= 15;
+        targetDim = (targetDim * 0.8).toInt();
+        resized = img.copyResize(decoded, width: targetDim);
+        compressed = img.encodeJpg(resized, quality: quality);
+      }
+      return base64Encode(compressed);
+    } catch (_) {
+      return base64Encode(jpegBytes);
+    }
+  }
+
+  Future<void> _saveOutcome(ReportOutcome outcome) async {
+    final token = ++_saveToken;
+    setState(() => _saveStatus = _SaveStatus.saving);
     try {
       final user = FirebaseAuth.instance.currentUser;
-      final uid = user?.uid ?? 'anonymous_user';
-
-      // 1. Compress image to max 800px / 70% JPEG and cap under 300 KB
-      String base64String;
-      try {
-        final decoded = img.decodeImage(jpegBytes);
-        if (decoded == null) {
-          base64String = base64Encode(jpegBytes);
-        } else {
-          int targetDim = 800;
-          img.Image resized = decoded;
-          if (decoded.width > targetDim || decoded.height > targetDim) {
-            if (decoded.width >= decoded.height) {
-              resized = img.copyResize(decoded, width: targetDim);
-            } else {
-              resized = img.copyResize(decoded, height: targetDim);
-            }
-          }
-          int quality = 70;
-          List<int> compressed = img.encodeJpg(resized, quality: quality);
-          const int maxBytes = 300 * 1024;
-          while (compressed.length > maxBytes && quality > 20) {
-            quality -= 15;
-            targetDim = (targetDim * 0.8).toInt();
-            resized = img.copyResize(decoded, width: targetDim);
-            compressed = img.encodeJpg(resized, quality: quality);
-          }
-          base64String = base64Encode(compressed);
-        }
-      } catch (_) {
-        base64String = base64Encode(jpegBytes);
-      }
-
-      final lat = capture.latitude ?? 0.0;
-      final lng = capture.longitude ?? 0.0;
+      if (user == null) throw StateError('Not signed in');
+      final capture = outcome.capture;
+      final lat = capture.latitude!;
+      final lng = capture.longitude!;
+      final category = outcome.validation.category.wireValue;
       final isEligible = outcome.eligible;
 
+      final service = FirestoreService();
+      final reportId = _reportId ??= service.newReportId();
+      // Only a valid report stores its photo (in reportPhotos).
+      final photo = isEligible
+          ? (_photoBase64 ??= _compressToBase64(capture.jpegBytes!))
+          : null;
+
       final report = ReportModel(
-        id: '',
-        uid: uid,
-        photoId: '',
-        imageUrl: 'data:image/jpeg;base64,$base64String',
+        id: reportId,
+        uid: user.uid,
         lat: lat,
         lng: lng,
-        type: outcome.validation.category.name.isNotEmpty
-            ? outcome.validation.category.name
-            : 'Other',
-        description: '',
-        status: isEligible ? 'valid' : 'rejected',
+        type: category,
+        status: isEligible ? reportStatusValid : reportStatusRejected,
         location: GeoPoint(lat, lng),
         // Precision 9 with our encoder, so the duplicate check can find it.
         geohash: geohash.encode(lat, lng, 9),
         createdAt: DateTime.now(),
         lastConfirmedAt: DateTime.now(),
-        aiCategory: outcome.validation.category.name,
+        aiCategory: category,
         aiConfidence: outcome.validation.confidence,
         aiReason: outcome.validation.reason,
       );
 
-      final firestoreService = FirestoreService();
-      await firestoreService.submitReport(
+      await service.submitReport(
         report,
-        photoBase64: base64String,
+        photoBase64: photo,
+        reportId: reportId,
       );
+      if (!mounted || token != _saveToken) return;
+      setState(() => _saveStatus = _SaveStatus.saved);
     } catch (e) {
-      if (kDebugMode) debugPrint('Error saving report to Firestore: $e');
+      if (kDebugMode) debugPrint('Saving the report failed: $e');
+      if (!mounted || token != _saveToken) return;
+      setState(() => _saveStatus = _SaveStatus.failed);
     }
   }
 
   void _resetToForm() {
     _checkToken++; // abandon any check still running
+    _saveToken++; // and ignore the result of any save still running
     setState(() {
       _capture = null;
       _outcome = null;
       _checkError = null;
+      _saveStatus = _SaveStatus.idle;
+      _reportId = null;
+      _photoBase64 = null;
       _currentStep = ReportFlowStep.form;
     });
   }
@@ -847,7 +877,7 @@ class _ReportScreenState extends State<ReportScreen>
               SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Each valid report earns 10 points. Your balance updates after verification.',
+                  'Each valid report earns $kPointsPerValidReport points. Your balance updates after your report is saved.',
                   style: TextStyle(
                     fontFamily: AppTypography.fontFamily,
                     fontSize: 13,
@@ -1009,6 +1039,140 @@ class _ReportScreenState extends State<ReportScreen>
                 ),
               ],
             ),
+    );
+  }
+
+  /// Approved view: the buttons that leave the screen are enabled once the
+  /// report is saved (or in the demo, where nothing is saved).
+  bool get _canLeaveApproved =>
+      _outcome == null || _saveStatus == _SaveStatus.saved;
+
+  /// The points banner on the Approved view. "points added" is shown only after
+  /// the save succeeded; if it failed the banner says so and offers Retry (which
+  /// re-runs only the save) and Retake photo.
+  Widget _buildPointsBanner() {
+    final failed = _outcome != null && _saveStatus == _SaveStatus.failed;
+    final saving = _outcome != null &&
+        (_saveStatus == _SaveStatus.saving || _saveStatus == _SaveStatus.idle);
+
+    final String title;
+    final String subtitle;
+    if (_outcome == null) {
+      // Demo controls only: illustrative text, nothing is saved.
+      title = '+$kPointsPerValidReport Points Earned';
+      subtitle = 'Updated balance: 130 points · Previously 120';
+    } else if (failed) {
+      title = "Couldn't save your report";
+      subtitle = 'Your points were not added. Check your connection and try '
+          'again.';
+    } else if (saving) {
+      title = 'Saving your report…';
+      subtitle = 'Your points are added once it is saved.';
+    } else {
+      title = '+$kPointsPerValidReport points added';
+      subtitle = 'Your report is saved.';
+    }
+
+    final color = failed ? AppColors.errorText : AppColors.primaryDark;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: failed ? AppColors.errorBg : AppColors.primaryLight,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.25), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              saving
+                  ? SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        color: color,
+                      ),
+                    )
+                  : Icon(
+                      failed ? Icons.error_outline : Icons.spa_outlined,
+                      color: color,
+                      size: 26,
+                    ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: 13,
+                        color: color.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (failed) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              height: 46,
+              child: ElevatedButton(
+                onPressed: _retrySave,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Retry',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              height: 46,
+              child: OutlinedButton(
+                onPressed: _resetToForm,
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: AppColors.surface,
+                  foregroundColor: AppColors.primaryDark,
+                  side: const BorderSide(color: AppColors.border),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Retake photo',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -1231,66 +1395,17 @@ class _ReportScreenState extends State<ReportScreen>
         ),
         const SizedBox(height: 14),
 
-        // Points Earned Highlight Banner
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.primaryLight,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: AppColors.primary.withValues(alpha: 0.25),
-              width: 1,
-            ),
-          ),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.spa_outlined,
-                color: AppColors.primaryDark,
-                size: 26,
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _outcome == null
-                          ? '+10 Points Earned'
-                          : 'Eligible for 10 points',
-                      style: const TextStyle(
-                        fontFamily: AppTypography.fontFamily,
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primaryDark,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _outcome == null
-                          ? 'Updated balance: 130 points · Previously 120'
-                          : 'Points are added when your report is submitted.',
-                      style: TextStyle(
-                        fontFamily: AppTypography.fontFamily,
-                        fontSize: 13,
-                        color: AppColors.primaryDark.withValues(alpha: 0.85),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+        // Points banner: saving / saved (points added) / save failed
+        _buildPointsBanner(),
         const SizedBox(height: 20),
 
-        // Action Buttons
+        // Action Buttons (only once the report is saved, so an unsaved report
+        // cannot be left behind by accident)
         SizedBox(
           width: double.infinity,
           height: 50,
           child: ElevatedButton(
-            onPressed: () => context.go('/map'),
+            onPressed: _canLeaveApproved ? () => context.go('/map') : null,
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
@@ -1314,7 +1429,7 @@ class _ReportScreenState extends State<ReportScreen>
           width: double.infinity,
           height: 50,
           child: OutlinedButton(
-            onPressed: _resetToForm,
+            onPressed: _canLeaveApproved ? _resetToForm : null,
             style: OutlinedButton.styleFrom(
               backgroundColor: AppColors.surface,
               foregroundColor: AppColors.primaryDark,
@@ -1565,7 +1680,10 @@ class _ReportScreenState extends State<ReportScreen>
           child: Text(
             _outcome == null
                 ? 'Illustrative rejection · Not part of the approved path'
-                : 'Retake the photo to try again',
+                : (_saveStatus == _SaveStatus.failed
+                    ? "This result couldn't be recorded. You can still retake "
+                        'the photo.'
+                    : 'Retake the photo to try again'),
             style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
               fontSize: 12,
               color: AppColors.textSecondary,

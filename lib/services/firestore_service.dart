@@ -1,9 +1,13 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/coupon_model.dart';
 import '../models/redemption_model.dart';
 import '../models/report_model.dart';
 import '../models/user_model.dart';
+import 'report_write_plan.dart';
 
 class FirestoreService {
   FirestoreService({FirebaseFirestore? firestore})
@@ -50,44 +54,90 @@ class FirestoreService {
   // Part A: Reports & Photos
   // ==========================================
 
-  /// Submits a new hazard report to Firestore:
-  /// 1. Creates `reports/{reportId}` with metadata and `photoId: reportId`
-  /// 2. If [photoBase64] is provided, saves to `reportPhotos/{reportId}`
-  Future<String> submitReport(ReportModel report, {String? photoBase64}) async {
-    final reportDoc = _reportsRef.doc();
-    final reportId = reportDoc.id;
+  /// A fresh report id. Create it once per outcome and pass it to every attempt
+  /// to save that report, so a retry can never create a second report.
+  String newReportId() => _reportsRef.doc().id;
 
-    final batch = _db.batch();
+  /// Saves one AI-checked report. Throws on any failure (never swallows).
+  ///
+  /// Everything is written in ONE batch, so it all succeeds or none of it does:
+  /// - status 'valid': `reports/{id}` + `reportPhotos/{id}` (the photo is stored
+  ///   only here) + `users/{uid}` points incremented by [kPointsPerValidReport]
+  /// - status 'rejected': only `reports/{id}`; no photo and no points
+  ///
+  /// Saving again with the same [reportId] (a retry) writes nothing and awards
+  /// no second set of points if the report already exists on the server.
+  /// Returns the report id.
+  Future<String> submitReport(
+    ReportModel report, {
+    String? photoBase64,
+    String? reportId,
+  }) async {
+    final reportRef = _reportsRef.doc(reportId ?? newReportId());
+    final plan = buildReportWritePlan(
+      report,
+      reportRef.id,
+      photoBase64: photoBase64,
+    );
 
-    final reportData = report.toMap();
-    reportData['photoId'] = reportId;
-    // Server time, not the phone's clock (the duplicate check's 7-day window
-    // relies on it).
-    reportData['createdAt'] = FieldValue.serverTimestamp();
-    batch.set(reportDoc, reportData);
+    // Already saved by an earlier attempt whose reply was lost: do not write
+    // (or award points) a second time. Read from the server only, so being
+    // offline fails here instead of queueing a write that could land later.
+    final existing = await reportRef.get(
+      const GetOptions(source: Source.server),
+    );
+    if (existing.exists) return reportRef.id;
 
-    if (photoBase64 != null && photoBase64.isNotEmpty) {
-      final photoDoc = _reportPhotosRef.doc(reportId);
-      batch.set(photoDoc, {
-        'photoBase64': photoBase64,
-        'reportId': reportId,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+    final batch = _db.batch()..set(reportRef, plan.reportData);
+    final photoData = plan.photoData;
+    if (photoData != null) {
+      batch.set(_reportPhotosRef.doc(reportRef.id), photoData);
     }
-
+    final pointsData = plan.userPointsData;
+    if (pointsData != null) {
+      batch.set(_userRef(report.uid), pointsData, SetOptions(merge: true));
+    }
     await batch.commit();
-    return reportId;
+    return reportRef.id;
   }
 
-  /// Fetches a single report's base64 photo on-demand from `reportPhotos/{photoId}`
-  Future<String?> getReportPhotoBase64(String photoId) async {
+  // Photos already loaded this session, and loads in progress, shared by every
+  // FirestoreService instance.
+  static final Map<String, Uint8List> _photoCache = {};
+  static final Map<String, Future<Uint8List?>> _photoLoads = {};
+
+  /// Loads one report's photo from `reportPhotos/{reportId}.photoBase64`.
+  ///
+  /// Only ever called for a single report that is on screen. Lists, the map and
+  /// the duplicate check read `reports` only. Cached in memory after the first
+  /// load. Returns null if there is no photo or it could not be loaded (not
+  /// cached, so a later call tries again).
+  Future<Uint8List?> getReportPhoto(String reportId) {
+    final cached = _photoCache[reportId];
+    if (cached != null) return Future.value(cached);
+    return _photoLoads[reportId] ??= _loadReportPhoto(reportId);
+  }
+
+  Future<Uint8List?> _loadReportPhoto(String reportId) async {
     try {
-      final snap = await _reportPhotosRef.doc(photoId).get();
-      if (!snap.exists) return null;
-      return snap.data()?['photoBase64'] as String?;
+      final snap = await _reportPhotosRef.doc(reportId).get();
+      final stored = snap.data()?['photoBase64'];
+      if (!snap.exists || stored is! String || stored.isEmpty) return null;
+      final payload = stored.contains(',') ? stored.split(',').last : stored;
+      final bytes = base64Decode(payload.trim());
+      _photoCache[reportId] = bytes;
+      return bytes;
     } catch (_) {
       return null;
+    } finally {
+      _photoLoads.remove(reportId);
     }
+  }
+
+  /// Forgets cached photos (used by tests).
+  static void clearPhotoCache() {
+    _photoCache.clear();
+    _photoLoads.clear();
   }
 
   /// Streams reports submitted by the given user (ordered by creation date desc)
