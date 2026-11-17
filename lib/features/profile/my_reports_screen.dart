@@ -1,10 +1,12 @@
-import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme_proposal.dart';
 import '../../models/report_model.dart';
 import '../../services/firestore_service.dart';
+import '../../services/report_write_plan.dart';
+import '../ai_validation/validation_result.dart';
+import '../report/report_photo_view.dart';
 import 'widgets/widgets.dart';
 
 /// Screen displaying submitted dengue breeding site reports with filter options.
@@ -67,40 +69,23 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
     );
   }
 
+  /// The photo is not in the `reports` document: it is loaded on demand from
+  /// `reportPhotos` (cached). Only valid reports have one; a rejected report
+  /// shows the placeholder without any read.
   Widget _buildReportThumbnail(ReportModel report) {
-    if (report.imageUrl.isNotEmpty) {
-      if (report.imageUrl.startsWith('data:image') || !report.imageUrl.startsWith('http')) {
-        try {
-          final cleanBase64 = report.imageUrl.contains(',')
-              ? report.imageUrl.split(',').last
-              : report.imageUrl;
-          return Image.memory(
-            base64Decode(cleanBase64.trim()),
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => const Icon(
-              Icons.image_outlined,
-              color: AppColors.primary,
-              size: 28,
-            ),
-          );
-        } catch (_) {}
-      } else {
-        return Image.network(
-          report.imageUrl,
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => const Icon(
-            Icons.image_outlined,
-            color: AppColors.primary,
-            size: 28,
-          ),
-        );
-      }
+    final status = report.status.toLowerCase();
+    final hasPhoto = status == reportStatusValid || status == 'approved';
+    if (!hasPhoto) {
+      return const Icon(
+        Icons.image_outlined,
+        color: AppColors.primary,
+        size: 28,
+      );
     }
-
-    return const Icon(
-      Icons.image_outlined,
-      color: AppColors.primary,
-      size: 28,
+    return ReportPhotoView(
+      reportId: report.photoId.isNotEmpty ? report.photoId : report.id,
+      width: 68,
+      height: 68,
     );
   }
 
@@ -108,7 +93,8 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
     final textTheme = Theme.of(context).textTheme;
     final isApproved = report.status.toLowerCase() == 'valid' ||
         report.status.toLowerCase() == 'approved';
-    final pointsText = isApproved ? '+10 pts' : 'Not awarded yet';
+    final pointsText =
+        isApproved ? '+$kPointsPerValidReport pts' : 'Not awarded yet';
 
     return Container(
       width: double.infinity,
@@ -144,7 +130,7 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
                   children: [
                     Expanded(
                       child: Text(
-                        report.type,
+                        SiteCategory.labelFor(report.type),
                         style: (textTheme.titleMedium ?? AppTypography.heading).copyWith(
                           fontSize: 15,
                           fontWeight: FontWeight.bold,
@@ -377,7 +363,7 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
               // Footnote
               Center(
                 child: Text(
-                  'Only valid reports earn 10 points and appear on the map.',
+                  'Only valid reports earn $kPointsPerValidReport points and appear on the map.',
                   textAlign: TextAlign.center,
                   style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
                     fontSize: 12,
