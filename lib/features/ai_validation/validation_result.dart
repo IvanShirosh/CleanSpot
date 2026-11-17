@@ -30,6 +30,33 @@ enum SiteCategory {
     }
     return null;
   }
+
+  /// Older documents stored the Dart enum name (`blockedDrain`) or a display
+  /// label (`Tyres`) instead of the wire value.
+  static const _legacyNames = {
+    'stagnantWater': 'stagnant_water',
+    'blockedDrain': 'blocked_drain',
+    'Stagnant Water': 'stagnant_water',
+    'Tyres': 'tire',
+    'Blocked Drain': 'blocked_drain',
+    'Containers': 'container',
+    'Other': 'other',
+  };
+
+  /// Converts a stored category (wire value, old enum name or old label) to the
+  /// wire value. Unknown strings are returned unchanged; null stays null.
+  static String? normalizeStored(String? stored) {
+    if (stored == null) return null;
+    return _legacyNames[stored] ?? stored;
+  }
+
+  /// Display name for a stored category, whatever form it was saved in.
+  static String labelFor(String? stored) {
+    final normalized = normalizeStored(stored);
+    final category = fromWire(normalized);
+    if (category != null) return category.label;
+    return (normalized == null || normalized.isEmpty) ? 'Other' : normalized;
+  }
 }
 
 /// The AI's verdict on one photo.

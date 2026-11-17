@@ -1,12 +1,23 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../features/ai_validation/validation_result.dart';
+
 class ReportModel {
   final String id;
   final String uid;
+
+  /// Id of the `reportPhotos` document. The photo itself is never stored in the
+  /// `reports` document; load it with `FirestoreService.getReportPhoto`.
   final String photoId;
-  final String imageUrl; // Kept for backwards compatibility / optional direct url
+
+  /// Only filled when reading old documents that still hold the photo
+  /// (`imageUrl` / `photoUrl`). Never written back by [toMap].
+  final String imageUrl;
   final double lat;
   final double lng;
+
+  /// Site type as a wire value: stagnant_water, tire, blocked_drain,
+  /// container, other or none (old documents are normalized when read).
   final String type;
   final String description;
   final String status; // 'pending' | 'valid' | 'rejected'
@@ -28,7 +39,7 @@ class ReportModel {
     this.imageUrl = '',
     required this.lat,
     required this.lng,
-    this.type = 'Other',
+    this.type = 'other',
     this.description = '',
     required this.status,
     required this.location,
@@ -61,7 +72,7 @@ class ReportModel {
       imageUrl: imageVal,
       lat: latVal,
       lng: lngVal,
-      type: map['type'] as String? ?? 'Other',
+      type: SiteCategory.normalizeStored(map['type'] as String?) ?? 'other',
       description: map['description'] as String? ?? '',
       status: map['status'] as String? ?? 'pending',
       location: loc,
@@ -70,7 +81,7 @@ class ReportModel {
       createdAt: created,
       lastConfirmedAt:
           (map['lastConfirmedAt'] as Timestamp?)?.toDate() ?? created,
-      aiCategory: map['aiCategory'] as String?,
+      aiCategory: SiteCategory.normalizeStored(map['aiCategory'] as String?),
       aiConfidence: (map['aiConfidence'] as num?)?.toDouble(),
       aiReason: map['aiReason'] as String?,
     );
@@ -80,7 +91,6 @@ class ReportModel {
     return {
       'uid': uid,
       'photoId': photoId.isNotEmpty ? photoId : id,
-      if (imageUrl.isNotEmpty) 'imageUrl': imageUrl,
       'lat': lat,
       'lng': lng,
       'type': type,
@@ -96,7 +106,6 @@ class ReportModel {
       if (aiReason != null) 'aiReason': aiReason,
       // Backwards compatibility for existing team code
       'reporterId': uid,
-      'photoUrl': imageUrl,
     };
   }
 
