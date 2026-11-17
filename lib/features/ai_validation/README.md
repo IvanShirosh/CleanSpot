@@ -4,8 +4,8 @@ Checks whether a report photo shows a possible dengue mosquito breeding site,
 using Gemini through Firebase AI Logic (Gemini Developer API).
 
 Camera, GPS, the AI check, the duplicate check, the decision and the Report
-screen flow are done. Saving reports and awarding points belong to the
-submission owner (see "Hook for report submission and points").
+screen flow are done. The Report screen also saves the result and awards points
+(see "Saving the result").
 
 ## What is here
 
@@ -39,17 +39,51 @@ valid GPS fix (within 50 m). Then:
    only if the AI says it is a breeding site with confidence of at least 0.7,
    the photo does not look fake, it is not a duplicate, and GPS is within 50 m.
 
-## Hook for report submission and points
+## Saving the result (reports, photo and points)
 
-`ReportScreen` has an optional callback:
+After the check, `ReportScreen` saves the result itself with
+`FirestoreService.submitReport` (`lib/services/firestore_service.dart`). What is
+written is decided by `buildReportWritePlan` (`lib/services/report_write_plan.dart`)
+and is written in **one write batch**, so it all happens or none of it does:
+
+| Result | `reports/{id}` | `reportPhotos/{id}` | `users/{uid}` points |
+|---|---|---|---|
+| **Approved** (`status: 'valid'`) | yes | yes (the only place the photo is stored) | `+10` (`kPointsPerValidReport`) on `pointsBalance` and `points` |
+| **Rejected** (`status: 'rejected'`) | yes (AI fields and geohash included) | **no** | **no** |
+
+- The `reports` document never contains the photo (no `imageUrl` / `photoUrl`).
+  Anything that shows a photo loads it for that one report with
+  `FirestoreService.getReportPhoto(reportId)` (cached; placeholder while loading
+  or if missing). Lists, the map and the duplicate check read `reports` only; a
+  test (`test/services/report_photos_access_test.dart`) fails if that changes.
+- `type` and `aiCategory` are saved as wire values (`stagnant_water`, `tire`,
+  `blocked_drain`, `container`, `other`, `none`). Older documents with enum names
+  (`blockedDrain`) are converted when read.
+- `createdAt` is the server's time; `geohash` is `encode(lat, lng, 9)` from
+  `geohash.dart`, so the duplicate check can find the report.
+- `confirmationCount` is for community "still there" confirmations, not a gate.
+
+**Failures.** `submitReport` never swallows an error. If saving fails the
+Approved view shows "Couldn't save your report" with **Retry** (re-runs only the
+save, not the AI check) and **Retake photo**, and never claims points were added.
+"+10 points added" appears only after the save succeeded. Each outcome gets one
+report id; Retry reuses it, and `submitReport` writes nothing (and awards no
+points) if that report already exists on the server, so a retry cannot save the
+report or the points twice. The "already saved?" check reads from the server
+only, so being offline fails the save instead of queueing a write.
+
+## Hook for other code (`onDecision`)
+
+`ReportScreen` also has an optional callback, if something else needs to react
+to a result:
 
 ```dart
 ReportScreen(onDecision: (ReportOutcome outcome) { ... });
 ```
 
 It is called **once per completed check** with a final approved or rejected
-decision. It is **not** called when the check failed (the user retries instead).
-This screen does not save anything and does not award points. `ReportOutcome`
+decision, when that decision is made (before the save finishes). It is **not**
+called when the check itself failed (the user retries instead). `ReportOutcome`
 contains:
 
 - `capture.jpegBytes`, `capture.latitude`, `capture.longitude`,
@@ -58,26 +92,7 @@ contains:
   `validation.looksFake`: the AI result
 - `isDuplicate`, `decision.eligible`, `decision.reason`, `checkedAt`
 
-What the submission owner should do:
-
-- Only save reports with `outcome.eligible == true`. A rejected photo is not
-  saved; the user retakes it.
-- Save an eligible report with `status: 'valid'` (automatic, no manual
-  review) and fill `aiCategory` (`validation.category.wireValue`),
-  `aiConfidence` and `aiReason` from `outcome.validation`. These optional fields
-  are on `ReportModel` and documented in `docs/DATA_MODEL.md`.
-- `confirmationCount` is for community "still there" confirmations, not a gate.
-- **Required for the duplicate check to work.** Save these fields exactly
-  like this, or the report will never be found as a duplicate:
-  - `geohash`: `encode(outcome.capture.latitude!, outcome.capture.longitude!, 9)`
-    from `lib/features/ai_validation/geohash.dart` (our encoder, precision 9).
-  - `createdAt`: `FieldValue.serverTimestamp()`. Do not use the phone's
-    clock. `FirestoreService.submitReport` does this (it overrides the
-    `Timestamp.fromDate(createdAt)` from `ReportModel.toMap()`).
-  - `status`: `'valid'` (the team's accepted status, see `docs/DATA_MODEL.md`).
-  - `location`: `GeoPoint(latitude, longitude)` (the same capture fix).
-- The Approved screen says "Eligible for 10 points"; actually awarding the
-  points is up to the submission/points owner.
+Do not save the report again from this callback: the screen already does.
 
 ## Duplicate check
 

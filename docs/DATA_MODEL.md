@@ -9,8 +9,8 @@ This document outlines the Cloud Firestore database collections, document struct
 | Collection | Description |
 |---|---|
 | `users` | User profile information and accumulated points balance. |
-| `reports` | Mosquito-breeding site reports (metadata, location, category, confirmation status). Keeps reads lightweight. |
-| `reportPhotos` | High-resolution compressed image Base64 payloads stored in isolation to prevent reading photo bytes in bulk queries. |
+| `reports` | Mosquito-breeding site reports (metadata, location, category, AI result, status). Never contains the photo, so reads stay lightweight. |
+| `reportPhotos` | The only place a report photo is stored (compressed Base64), one document per `'valid'` report. Rejected reports have no photo. |
 | `coupons` | Rewards available for redemption using points. |
 | `redemptions` | Records of coupons redeemed by users. |
 
@@ -27,8 +27,11 @@ Stores user profile and gamification balance data.
 | Field | Type | Description |
 |---|---|---|
 | `displayName` | `string` | Display name of the user. |
-| `pointsBalance` | `int` | Current balance of points accumulated by the user (also aliased as `points`). |
+| `pointsBalance` | `int` | Current balance of points accumulated by the user. Also written as `points` (the app reads `points` first, so both are always updated together). |
+| `points` | `int` | Same value as `pointsBalance`. |
 | `createdAt` | `timestamp` | Timestamp when the user account was registered. |
+
+**How points change:** saving a report with status `'valid'` adds 10 points (`FieldValue.increment(10)` on both `pointsBalance` and `points`, defined once as `kPointsPerValidReport` in `lib/services/report_write_plan.dart`) in the **same write batch** as the report and its photo. Redeeming a coupon subtracts the coupon cost. Rejected reports add nothing.
 
 ---
 
@@ -38,6 +41,14 @@ Stores reports of potential mosquito-breeding sites submitted by community membe
 
 > **Performance Rule:** List queries, radius/geohash searches, map pins, and duplicate-checking queries must only query this collection. Never fetch `reportPhotos` in list views.
 
+> **No photo here.** A `reports` document never holds the image (no `imageUrl` / `photoUrl` Base64). The photo is only in `reportPhotos/{photoId}` and is loaded on demand with `FirestoreService.getReportPhoto`. Old documents that still contain `imageUrl` / `photoUrl` are still read, but that data is never written back.
+
+> **What is saved.** After the AI check, every result is saved in ONE write batch:
+> - **`'valid'`** (approved): `reports/{id}` + `reportPhotos/{id}` + `users/{uid}` points `+10`.
+> - **`'rejected'`**: only `reports/{id}` (with the AI fields and geohash). No `reportPhotos` document and no points.
+>
+> A failed save is reported to the user (nothing is saved and no points are added), and Retry reuses the same `reportId`, so a retry cannot create a second report or award points twice.
+
 - **Document ID**: Auto-generated unique ID (`reportId`)
 
 ### Fields
@@ -45,19 +56,18 @@ Stores reports of potential mosquito-breeding sites submitted by community membe
 | Field | Type | Description |
 |---|---|---|
 | `uid` | `string` | UID of the user who submitted the report (alias `reporterId`). |
-| `photoId` | `string` | Document ID pointing to `reportPhotos/{photoId}` (defaults to same ID as `reportId`). |
-| `type` | `string` | Hazard category (e.g. `'Stagnant Water'`, `'Tyres'`, `'Blocked Drain'`, `'Containers'`, `'Other'`). |
+| `photoId` | `string` | Document ID of `reportPhotos/{photoId}` (same as `reportId`) for `'valid'` reports; empty (`''`) for `'rejected'` reports, which have no photo. |
+| `type` | `string` | Site type as a wire value: `'stagnant_water'`, `'tire'`, `'blocked_drain'`, `'container'`, `'other'` or `'none'`. Older documents may hold the enum name (`blockedDrain`) or a label (`Tyres`); they are converted when read. |
 | `description` | `string` | Optional details or notes from the submitter. |
 | `location` | `GeoPoint` | Geographic coordinates (`latitude`, `longitude`) of the breeding site. |
 | `lat` | `double` | Latitude coordinate. |
 | `lng` | `double` | Longitude coordinate. |
 | `geohash` | `string` | Geohash string computed from location for proximity queries. |
-| `status` | `string` | Status of the report: `'pending'`, `'valid'`, or `'rejected'`. |
-| `aiReason` | `string?` | Optional explanation or reason from AI validation. |
+| `status` | `string` | `'valid'` (AI approved, automatic) or `'rejected'` (AI did not approve). `'pending'` is not used by the AI flow. Only `'valid'` reports count for the map and the duplicate check. |
 | `confirmationCount` | `int` | Number of community/admin confirmations for duplicate reporting. |
 | `createdAt` | `timestamp` | Timestamp when the report was submitted. |
 | `lastConfirmedAt` | `timestamp` | Timestamp when the report was last confirmed/verified. |
-| `aiCategory` | `string` (optional) | Site type found by the AI photo check: `'stagnant_water'`, `'tire'`, `'blocked_drain'`, `'container'` or `'other'`. Absent on older reports. |
+| `aiCategory` | `string` (optional) | Site type found by the AI photo check, as a wire value: `'stagnant_water'`, `'tire'`, `'blocked_drain'`, `'container'`, `'other'` or `'none'`. Absent on older reports. |
 | `aiConfidence` | `number` (optional) | AI confidence that the photo shows a breeding site, from 0 to 1. Absent on older reports. |
 | `aiReason` | `string` (optional) | Short user-friendly explanation from the AI check. Absent on older reports. |
 
@@ -65,7 +75,7 @@ Stores reports of potential mosquito-breeding sites submitted by community membe
 
 ## 3. `reportPhotos` Collection
 
-Stores photo payloads separately from `reports` to ensure minimal egress and instant map/list querying without downloading image bytes.
+The only place a report photo is stored, kept separate from `reports` to ensure minimal egress and instant map/list querying without downloading image bytes. Only `'valid'` reports have a document here.
 
 - **Document ID**: Same ID as the associated report (`reportId`)
 
@@ -77,7 +87,7 @@ Stores photo payloads separately from `reports` to ensure minimal egress and ins
 | `reportId` | `string` | References the parent report in `reports/{reportId}`. |
 | `createdAt` | `timestamp` | Timestamp when the photo was uploaded. |
 
-> **Client Access Pattern:** A document from this collection is loaded only when the user opens the single detailed view for that specific report.
+> **Client Access Pattern:** A document from this collection is loaded only for a single report that is on screen, with `FirestoreService.getReportPhoto(reportId)` (cached in memory after the first load; a placeholder is shown while loading or if the photo is missing). Lists, the map and the duplicate check never read this collection.
 
 ---
 
