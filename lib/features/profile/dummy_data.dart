@@ -16,7 +16,7 @@ class DummyUser {
     this.name = 'Chathuranga Sandaruwan',
     this.email = 'chathuranga@example.com',
     this.photoUrl,
-    this.points = 120,
+    this.points = 0,
   });
 
   // Firestore schema compatibility aliases

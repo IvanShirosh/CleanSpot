@@ -716,7 +716,7 @@ class _ReportScreenState extends State<ReportScreen>
         if (_demoControls) ...[
           Center(
             child: Text(
-              'Demo report · Current balance: 120 points',
+              'Demo report',
               style: (textTheme.bodySmall ?? AppTypography.caption).copyWith(
                 fontSize: 12,
                 color: AppColors.textSecondary,
@@ -1060,7 +1060,7 @@ class _ReportScreenState extends State<ReportScreen>
     if (_outcome == null) {
       // Demo controls only: illustrative text, nothing is saved.
       title = '+$kPointsPerValidReport Points Earned';
-      subtitle = 'Updated balance: 130 points · Previously 120';
+      subtitle = 'Points added to your balance.';
     } else if (failed) {
       title = "Couldn't save your report";
       subtitle = 'Your points were not added. Check your connection and try '
@@ -1496,7 +1496,7 @@ class _ReportScreenState extends State<ReportScreen>
         // Subtitle
         Text(
           _outcome == null
-              ? 'An alternative outcome from the 120-point balance.'
+              ? 'An alternative outcome.'
               : 'We checked your photo and location.',
           style: (textTheme.bodyMedium ?? AppTypography.body).copyWith(
             color: AppColors.textSecondary,
@@ -1619,7 +1619,7 @@ class _ReportScreenState extends State<ReportScreen>
                     const SizedBox(height: 2),
                     Text(
                       _outcome == null
-                          ? 'Balance unchanged: 120 points'
+                          ? 'Your points balance remains unchanged.'
                           : 'This photo was not approved for points.',
                       style: TextStyle(
                         fontFamily: AppTypography.fontFamily,
