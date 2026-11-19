@@ -302,6 +302,7 @@ class SymptomResultScreen extends StatelessWidget {
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
+
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -333,6 +334,7 @@ class SymptomResultScreen extends StatelessWidget {
         ),
       ),
     );
+    
   }
 
   Widget _whiteCard({required Widget child}) {
