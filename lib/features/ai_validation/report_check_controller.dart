@@ -1,7 +1,5 @@
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
-
 import 'ai_validation_service.dart';
 import 'capture_result.dart';
 import 'duplicate_check.dart' as duplicates;
@@ -67,18 +65,12 @@ class ReportCheckController {
       );
     }
 
-    final total = Stopwatch()..start();
     onPhase?.call(CheckPhase.validating);
     final ValidationResult validation;
-    final validateTimer = Stopwatch()..start();
     try {
       validation = await _validate(bytes);
     } catch (e) {
       return ReportCheckResult.failure(retryMessage, 'validation threw: $e');
-    }
-    if (kDebugMode) {
-      debugPrint('AI TIMING: validate (App Check + Gemini + parse)='
-          '${validateTimer.elapsedMilliseconds} ms');
     }
     if (validation.isError) {
       return ReportCheckResult.failure(retryMessage, validation.error);
@@ -86,7 +78,6 @@ class ReportCheckController {
 
     onPhase?.call(CheckPhase.checkingDuplicates);
     final bool duplicate;
-    final duplicateTimer = Stopwatch()..start();
     try {
       duplicate = await _isDuplicate(capture.latitude!, capture.longitude!);
     } catch (e) {
@@ -94,15 +85,6 @@ class ReportCheckController {
         retryMessage,
         'duplicate check threw: $e',
       );
-    }
-    if (kDebugMode) {
-      debugPrint('AI TIMING: duplicate check='
-          '${duplicateTimer.elapsedMilliseconds} ms');
-      debugPrint('AI TIMING: total=${total.elapsedMilliseconds} ms');
-      debugPrint('AI RESULT: isBreedingSite=${validation.isBreedingSite} '
-          'category=${validation.category.wireValue} '
-          'confidence=${validation.confidence} looksFake=${validation.looksFake} '
-          'reason="${validation.reason}"');
     }
 
     return ReportCheckResult.success(
